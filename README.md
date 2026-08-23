@@ -4,7 +4,7 @@ A status line for [Claude Code](https://claude.com/claude-code), ported from the
 oh-my-posh **default** theme so the terminal and the agent look like one tool.
 
 ```
- playnook   main    Opus 5 (1M context) high   ctx █░░░░ 22%   5h ███░░ 65% 2h13m   7d ████░ 88% 3d23h
+ playnook   main    Opus 5 (1M context) high | ctx █░░░░ 22% | 5h ███░░ 65% 2h13m | 7d ████░ 88% 3d23h
 ```
 
 Path and git branch come from the theme. The rest is what a shell prompt has no
@@ -71,6 +71,10 @@ The bar is five cells of `█` / `░` — one cell per 20 points, rounded to ne
 so 0% is empty, 50% shows three, and 100% is full. Filled cells take the value's
 colour and the remainder stays grey. `BAR_CELLS` changes the width.
 
+A dim `|` divides the three gauges from each other, and their labels are bold,
+so the eye lands on a label before it reads a number. The git block needs no
+divider — its powerline cap already closes it.
+
 The theme's session (username) segment is deliberately dropped: on a single-user
 machine it spends width to say nothing.
 
@@ -95,12 +99,43 @@ Never a stack trace, and never a number that isn't real.
   `python3` on PATH may be the Microsoft Store shim, which is not an interpreter
   at all; candidates resolving inside `WindowsApps` are skipped for that reason.
 - **A Nerd Font**, for the powerline separators (`U+E0B0`, `U+E0B6`, `U+E0B4`)
-  and the folder glyph (`U+EA83`). The bar and `✎` are plain Unicode.
+  and the folder glyph (`U+EA83`). The bar and `✎` are plain Unicode. An
+  older *Powerline-patched* font is not enough — see below.
 - **A truecolor terminal** — colours are 24-bit `38;2;R;G;B`.
 - **git** is optional; no repo simply means no git segment.
 
 POSIX `sh` only. Works on Windows (Git Bash), macOS and Linux; Windows-style
 paths in the payload are converted.
+
+### Getting the font right
+
+Boxes or `?` where the separators and folder should be mean the terminal font
+has no glyph there. The usual cause is a font from the older **Powerline**
+project rather than a **Nerd Font**: those cover `U+E0B0`–`U+E0B3` only, so
+the arrow renders and the two diamond caps (`U+E0B6`, `U+E0B4`) and the folder
+(`U+EA83`, a Codicon) do not. Having a directory full of `... for Powerline.ttf`
+is not the same as having a Nerd Font installed.
+
+Any Nerd Font v3 carries all four. Meslo is a good default — it derives from
+Menlo, so on macOS it changes nothing but the glyph coverage:
+
+```sh
+brew install --cask font-meslo-lg-nerd-font          # macOS
+```
+
+Then point the terminal at it. In Apple Terminal the profile font is set per
+profile, and it wants the **PostScript** name, which is not the menu name:
+`MesloLGSNF-Regular`, not `MesloLGSNerdFont-Regular`. A name it does not
+recognise is accepted in silence and leaves the setting empty, so read it back:
+
+```sh
+osascript -e 'tell application "Terminal" to set font name of settings set "Basic" to "MesloLGSNF-Regular"'
+osascript -e 'tell application "Terminal" to get font name of settings set "Basic"'
+```
+
+Open windows keep their own copy of the profile, so the change shows up in the
+next new window. To check a font before setting it, `fc-list` on Linux, or the
+Font Book inspector on macOS.
 
 ## If something already owns the statusLine slot
 

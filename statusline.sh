@@ -203,6 +203,9 @@ glyphs=$(printf '\356\202\266 \356\202\260 \356\202\264 \356\252\203 \342\234\21
 set -- $glyphs
 lead=$1 arrow=$2 trail=$3 folder_icon=$4 dirty_icon=$5 bar_on_cell=$6 bar_off_cell=$7
 
+# Section divider: dim, so it groups without competing with the values.
+sep="${fg_grey}|${r}"
+
 # --- compose ---
 # The theme opened with a session (username) segment; dropped here, because
 # a single-user machine gains nothing from being told whose it is. The path
@@ -280,7 +283,7 @@ add_gauge() { # $1 label, $2 percentage (digits only), $3 reset text or ""
     cell=$((cell + 1))
   done
 
-  line="${line}  ${fg_white}$1${r} ${pct_colour}${bar_on}${fg_grey}${bar_off}${r}"
+  line="${line} ${sep} ${fg_white}${b}$1${r} ${pct_colour}${bar_on}${fg_grey}${bar_off}${r}"
   line="${line} ${pct_colour}${b}$2%${r}"
   # The reset time trails the number, dim, so the number reads first.
   [ -n "$3" ] && line="${line} ${fg_grey}$3${r}"
