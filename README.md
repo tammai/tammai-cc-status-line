@@ -134,7 +134,8 @@ Elsewhere the installer prints what to run rather than asking a piped-from-curl
 script for a root password:
 
 ```sh
-sudo pacman -S ttf-meslo-nerd            # Arch
+scoop bucket add nerd-fonts && scoop install Meslo-NF   # Windows
+sudo pacman -S ttf-meslo-nerd                           # Arch
 ```
 
 or unpack a [release](https://github.com/ryanoasis/nerd-fonts/releases) into
@@ -150,9 +151,15 @@ The profile is left alone if the font it already names has the glyphs; that
 check is why an unrelated Nerd Font is never overwritten. Open windows keep
 their own copy of a profile, so the change appears in the next new window.
 
-Other terminals set this themselves — in iTerm2, VS Code
-(`terminal.integrated.fontFamily`), Ghostty (`font-family`) and the rest, point
-the font at a Nerd Font and the glyphs appear.
+Windows cannot be done from here: Windows Terminal keeps the face in its own
+`settings.json` and the old console keeps it in the registry, per executable.
+So the installer prints where each one lives, and only when the font was
+missing — an established setup does not need telling twice.
+
+Other terminals set this themselves. In Windows Terminal it is Settings,
+Defaults, Appearance, Font face; in iTerm2, VS Code
+(`terminal.integrated.fontFamily`) and Ghostty (`font-family`) point the font
+at a Nerd Font and the glyphs appear.
 
 ## If something already owns the statusLine slot
 

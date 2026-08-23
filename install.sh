@@ -298,25 +298,42 @@ sys.exit(2)
 PY
 }
 
+# Git Bash and MSYS report MINGW64_NT-… and MSYS_NT-…, Cygwin CYGWIN_NT-…;
+# all three are Windows for our purposes. `uname` is assumed by little else
+# here, so a missing one degrades to "other" rather than killing the script.
+os_kind() {
+  case $(uname -s 2>/dev/null || echo unknown) in
+    Darwin) echo darwin ;;
+    Linux) echo linux ;;
+    MINGW* | MSYS* | CYGWIN* | Windows_NT) echo windows ;;
+    *) echo other ;;
+  esac
+}
+
 font_hint() {
   cat >&2 <<EOF
 font: install a Nerd Font, then re-run this script.
-  macOS   brew install --cask $NERD_CASK
-  Linux   your distribution's Meslo Nerd Font package (Arch: ttf-meslo-nerd),
-          or unpack a release into ~/.local/share/fonts and run fc-cache -f
-  any     https://github.com/ryanoasis/nerd-fonts/releases
+  macOS     brew install --cask $NERD_CASK
+  Windows   scoop bucket add nerd-fonts && scoop install Meslo-NF
+            (or winget, or right-click the .ttf files and Install)
+  Linux     your distribution's Meslo Nerd Font package (Arch: ttf-meslo-nerd),
+            or unpack a release into ~/.local/share/fonts and run fc-cache -f
+  any       https://github.com/ryanoasis/nerd-fonts/releases
 EOF
 }
 
 # Only the case that needs no sudo is automated. Asking a piped-from-curl
 # script for a root password is a worse bargain than printing one line.
 font_auto_install() {
-  case $(uname -s) in
-    Darwin)
+  case $(os_kind) in
+    darwin)
       command -v brew >/dev/null 2>&1 || return 2
       echo "font: brew install --cask $NERD_CASK"
       brew install --cask "$NERD_CASK" || return 1
       return 0 ;;
+    # Windows and Linux both want either a root password or a bucket added to
+    # someone's package manager. Neither is a decision a piped-from-curl
+    # script should be making, so those print instead.
     *) return 2 ;;
   esac
 }
@@ -325,7 +342,7 @@ font_auto_install() {
 # the one in the font menu — and it accepts a name it does not recognise in
 # silence, leaving the setting empty. So read it back and check.
 apple_terminal_font() {
-  [ "$(uname -s)" = Darwin ] || return 2
+  [ "$(os_kind)" = darwin ] || return 2
   [ "${TERM_PROGRAM-}" = Apple_Terminal ] || return 2
   command -v osascript >/dev/null 2>&1 || return 2
 
@@ -349,10 +366,24 @@ apple_terminal_font() {
   return 0
 }
 
+# Windows Terminal keeps the face in its own settings.json, and the old
+# console keeps it in the registry per-executable. Neither is safe to edit
+# from here, so say where it is and let the reader do it.
+windows_terminal_hint() {
+  cat <<EOF
+font: point the terminal at it, or the glyphs stay boxes:
+      Windows Terminal — Settings, Defaults, Appearance, Font face
+      (or "font": { "face": "MesloLGS Nerd Font" } in its settings.json)
+      Git Bash console — right-click the title bar, Options, Text
+EOF
+}
+
 if [ "$do_font" = 1 ]; then
+  font_was_missing=0
   if found=$(fontq scan); then
     echo "font: $found already covers the glyphs"
   else
+    font_was_missing=1
     echo "font: nothing installed carries U+E0B6, U+E0B4 and U+EA83"
     rc=0
     font_auto_install || rc=$?
@@ -368,8 +399,15 @@ if [ "$do_font" = 1 ]; then
     fi
   fi
 
-  # A font on disk is only half of it; the terminal has to be pointed at it.
-  [ "$do_terminal_font" = 1 ] && { apple_terminal_font || :; }
+  # A font on disk is only half of it; the terminal has to name it. macOS can
+  # be done here. Windows cannot, so it is described — and only when the font
+  # was missing, since an established setup does not need telling twice.
+  if [ "$do_terminal_font" = 1 ]; then
+    case $(os_kind) in
+      darwin) apple_terminal_font || : ;;
+      windows) [ "$font_was_missing" = 0 ] || windows_terminal_hint ;;
+    esac
+  fi
 fi
 
 # ------------------------------------------------------------------ install
