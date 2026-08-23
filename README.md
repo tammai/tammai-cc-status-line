@@ -28,16 +28,25 @@ sh install.sh
 ```
 
 ```
-install.sh [--dir DIR]     install or re-install (idempotent)
-install.sh --uninstall     remove statusline.sh and the statusLine setting
+install.sh [--dir DIR]          install or re-install (idempotent)
+install.sh --no-font            skip the font check and install
+install.sh --no-terminal-font   leave Apple Terminal's profile font alone
+install.sh --uninstall          remove statusline.sh and the statusLine setting
 install.sh --version
 install.sh --help
 ```
 
-It writes exactly two things — `statusline.sh`, and the `statusLine` key of
-`settings.json` — backs that file up with a timestamp first, and does a surgical
-one-line replace so every other key and hook survives byte-for-byte. Run it
-again any time; it reports "already points here" and changes nothing.
+It writes `statusline.sh` and the `statusLine` key of `settings.json` — backing
+that file up with a timestamp first, and doing a surgical one-line replace so
+every other key and hook survives byte-for-byte. Run it again any time; it
+reports "already points here" and changes nothing.
+
+First, though, it looks at the fonts, because the line is illegible in the wrong
+one and a fresh machine is the likeliest place to hit that. Two things follow,
+and only on a machine that has no font with the glyphs: the package manager is
+asked for a Nerd Font, and on Apple Terminal the profile is pointed at it.
+`--no-font` and `--no-terminal-font` opt out of each. Neither is reached when a
+font already covers the glyphs, so re-running stays a no-op.
 
 `--dir` (or `$CLAUDE_CONFIG_DIR`) installs into a config directory other than
 `~/.claude`.
@@ -109,33 +118,48 @@ paths in the payload are converted.
 
 ### Getting the font right
 
-Boxes or `?` where the separators and folder should be mean the terminal font
-has no glyph there. The usual cause is a font from the older **Powerline**
-project rather than a **Nerd Font**: those cover `U+E0B0`–`U+E0B3` only, so
-the arrow renders and the two diamond caps (`U+E0B6`, `U+E0B4`) and the folder
-(`U+EA83`, a Codicon) do not. Having a directory full of `... for Powerline.ttf`
-is not the same as having a Nerd Font installed.
+`install.sh` handles this, and only steps in when it has to. What it is looking
+for is narrow: the two diamond caps (`U+E0B6`, `U+E0B4`) and the folder
+(`U+EA83`, a Codicon).
 
-Any Nerd Font v3 carries all four. Meslo is a good default — it derives from
-Menlo, so on macOS it changes nothing but the glyph coverage:
+Filenames cannot answer that question, which is why the check reads each
+installed font's `cmap` instead. A machine can hold a complete set of
+`... for Powerline.ttf` and still be missing three of the four glyphs, because
+that project stopped at `U+E0B3` — the arrow lands and the rest do not. The
+scan costs about 50ms across a few hundred fonts.
 
-```sh
-brew install --cask font-meslo-lg-nerd-font          # macOS
-```
-
-Then point the terminal at it. In Apple Terminal the profile font is set per
-profile, and it wants the **PostScript** name, which is not the menu name:
-`MesloLGSNF-Regular`, not `MesloLGSNerdFont-Regular`. A name it does not
-recognise is accepted in silence and leaves the setting empty, so read it back:
+If nothing qualifies, `brew install --cask font-meslo-lg-nerd-font` runs on
+macOS. Meslo derives from Menlo, so it changes nothing but the glyph coverage.
+Elsewhere the installer prints what to run rather than asking a piped-from-curl
+script for a root password:
 
 ```sh
-osascript -e 'tell application "Terminal" to set font name of settings set "Basic" to "MesloLGSNF-Regular"'
-osascript -e 'tell application "Terminal" to get font name of settings set "Basic"'
+scoop bucket add nerd-fonts && scoop install Meslo-NF   # Windows
+sudo pacman -S ttf-meslo-nerd                           # Arch
 ```
 
-Open windows keep their own copy of the profile, so the change shows up in the
-next new window. To check a font before setting it, `fc-list` on Linux, or the
-Font Book inspector on macOS.
+or unpack a [release](https://github.com/ryanoasis/nerd-fonts/releases) into
+`~/.local/share/fonts` and run `fc-cache -f`. Either way the install continues,
+and the line renders without its separators until a font is there.
+
+A font on disk is only half of it: the terminal has to be pointed at it, and
+that is per profile. Apple Terminal is handled — it wants the **PostScript**
+name rather than the one in the font menu (`MesloLGSNF-Regular`, not
+`MesloLGSNerdFont-Regular`) and accepts a name it does not know in silence,
+leaving the setting empty, so the installer reads it back before believing it.
+The profile is left alone if the font it already names has the glyphs; that
+check is why an unrelated Nerd Font is never overwritten. Open windows keep
+their own copy of a profile, so the change appears in the next new window.
+
+Windows cannot be done from here: Windows Terminal keeps the face in its own
+`settings.json` and the old console keeps it in the registry, per executable.
+So the installer prints where each one lives, and only when the font was
+missing — an established setup does not need telling twice.
+
+Other terminals set this themselves. In Windows Terminal it is Settings,
+Defaults, Appearance, Font face; in iTerm2, VS Code
+(`terminal.integrated.fontFamily`) and Ghostty (`font-family`) point the font
+at a Nerd Font and the glyphs appear.
 
 ## If something already owns the statusLine slot
 
