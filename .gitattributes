@@ -1,0 +1,4 @@
+# Shell scripts must keep LF in the working tree on every platform: a CRLF
+# checkout makes `sh` fail on the stray carriage returns.
+* text=auto eol=lf
+*.sh text eol=lf
