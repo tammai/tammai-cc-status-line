@@ -55,6 +55,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Create the directory up front for an install, then canonicalise: the
+# dispatcher should record a clean absolute path, not whatever relative or
+# dot-laden form happened to be typed on the command line.
+[ "$action" = install ] && mkdir -p "$target"
+if [ -d "$target" ]; then
+  target=$(CDPATH= cd -- "$target" && pwd)
+fi
+
 settings="$target/settings.json"
 dest="$target/statusline.sh"
 
@@ -150,7 +158,6 @@ fi
 # status line that errors on every turn.
 sh -n "$src" || { echo "install.sh: statusline.sh failed a syntax check" >&2; exit 1; }
 
-mkdir -p "$target"
 cp "$src" "$dest"
 chmod +x "$dest" 2>/dev/null || true
 echo "installed: $dest"

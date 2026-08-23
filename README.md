@@ -42,6 +42,12 @@ again any time; it reports "already points here" and changes nothing.
 `--dir` (or `$CLAUDE_CONFIG_DIR`) installs into a config directory other than
 `~/.claude`.
 
+`--uninstall` deletes `statusline.sh` and drops the `statusLine` key. It backs
+the file up first, but unlike install it rewrites the JSON, so formatting is
+normalised even though every other key survives. If another tool owned
+`statusLine` before you installed this, restore its command from the backup the
+installer made at the time.
+
 ## What it shows
 
 | segment | source | colour |
