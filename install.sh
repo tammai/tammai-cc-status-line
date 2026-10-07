@@ -14,11 +14,11 @@
 
 set -eu
 
-VERSION=1.1.0
+VERSION=1.1.1
 RAW_BASE=https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main
 
 self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || self_dir=.
-target=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+target=${CLAUDE_CONFIG_DIR:-}
 action=install
 do_font=1
 do_terminal_font=1
@@ -68,10 +68,30 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Resolve the default only now: --help and --version must work on a machine
+# with no HOME, and under `set -u` a default of $HOME/.claude would have died
+# reading it before the argument loop ever ran.
+if [ -z "$target" ]; then
+  if [ -n "${HOME-}" ]; then
+    target=$HOME/.claude
+  else
+    echo "install.sh: no --dir given, and neither \$CLAUDE_CONFIG_DIR nor \$HOME is set" >&2
+    exit 2
+  fi
+fi
+
 # Create the directory up front for an install, then canonicalise: the
 # dispatcher should record a clean absolute path, not whatever relative or
 # dot-laden form happened to be typed on the command line.
-[ "$action" = install ] && mkdir -p "$target"
+if [ "$action" = install ]; then
+  # A path that exists but is not a directory would otherwise surface as a
+  # bare mkdir error with no hint of which option caused it.
+  if [ -e "$target" ] && [ ! -d "$target" ]; then
+    echo "install.sh: $target exists and is not a directory" >&2
+    exit 2
+  fi
+  mkdir -p "$target" || { echo "install.sh: cannot create $target" >&2; exit 1; }
+fi
 if [ -d "$target" ]; then
   target=$(CDPATH= cd -- "$target" && pwd)
 fi
@@ -104,7 +124,9 @@ fi
 # ---------------------------------------------------------------- uninstall
 if [ "$action" = uninstall ]; then
   if [ -f "$settings" ]; then
-    SETTINGS=$settings "$py" - <<'PY'
+    # `|| :` so an unparseable settings.json still lets the renderer below be
+    # removed; the reason is already printed by the block itself.
+    SETTINGS=$settings "$py" - <<'PY' || :
 import io, json, os, shutil, sys, time
 
 path = os.environ["SETTINGS"]
@@ -435,9 +457,16 @@ fi
 # status line that errors on every turn.
 sh -n "$src" || { echo "install.sh: statusline.sh failed a syntax check" >&2; exit 1; }
 
-cp "$src" "$dest"
+# Running from inside the config directory makes src and dest the same file,
+# and cp would fail there — aborting before settings.json is ever touched.
+src_dir=$(CDPATH= cd -- "$(dirname -- "$src")" && pwd)
+if [ "$src_dir/$(basename -- "$src")" = "$dest" ]; then
+  echo "installed: $dest (already in place)"
+else
+  cp "$src" "$dest"
+  echo "installed: $dest"
+fi
 chmod +x "$dest" 2>/dev/null || true
-echo "installed: $dest"
 
 # The dispatcher. Guarded, so a machine without the script — or a wiped config
 # directory — drains stdin quietly instead of erroring every turn.
@@ -445,7 +474,7 @@ command='if [ -f "${HOME-}/.claude/statusline.sh" ]; then sh "${HOME-}/.claude/s
 
 # Installing somewhere other than ~/.claude: point at that path literally.
 case $target in
-  "$HOME/.claude") ;;
+  "${HOME-}/.claude") ;;
   *) command="if [ -f \"$dest\" ]; then sh \"$dest\"; else { command -p cat 2>/dev/null || cat; } >/dev/null 2>&1 || :; fi" ;;
 esac
 
@@ -455,6 +484,37 @@ import io, json, os, shutil, sys, time
 path = os.environ["SETTINGS"]
 command = os.environ["COMMAND"]
 block = {"type": "command", "command": command}
+
+
+def indent_step(text):
+    """The indent this file uses for a top-level key, so an insert matches it."""
+    for ln in text.splitlines()[1:]:
+        bare = ln.lstrip(" \t")
+        if bare.startswith('"'):
+            return ln[:len(ln) - len(bare)] or "  "
+    return "  "
+
+
+def insert_key(text, blk):
+    """Add statusLine to a JSON object textually, leaving all else untouched.
+
+    Returns None if the text is not a shape worth hand-editing. The caller
+    verifies the result parses to the intended object before writing it.
+    """
+    close = text.rfind("}")
+    if close == -1:
+        return None
+    head, tail = text[:close].rstrip(), text[close:]
+    if not head.endswith("{") and not head.endswith(","):
+        head += ","                        # the object already had keys
+    nl = "\r\n" if "\r\n" in text else "\n"
+    step = indent_step(text)
+    lines = []
+    for ln in json.dumps({"statusLine": blk}, indent=2).split("\n")[1:-1]:
+        bare = ln.lstrip(" ")              # re-indent from dumps' 2-space step
+        lines.append(step * ((len(ln) - len(bare)) // 2) + bare)
+    return head + nl + nl.join(lines) + nl + tail
+
 
 # utf-8-sig: a BOM-prefixed settings.json is valid and must survive a round trip.
 if not os.path.exists(path):
@@ -469,7 +529,12 @@ try:
 except ValueError as exc:
     sys.exit("install.sh: %s is not valid JSON (%s); not touching it." % (path, exc))
 
-old = (data.get("statusLine") or {}).get("command")
+# statusLine is normally {"type": ..., "command": ...}, but a hand-edited
+# file can hold a bare string or a list there, and .get() on those raises.
+# Only a dict has a command to compare or to swap surgically; any other shape
+# is "owned by something else, contents unknown" and takes the rewrite path.
+existing = data.get("statusLine")
+old = existing.get("command") if isinstance(existing, dict) else None
 if old == command:
     print("settings.json: statusLine already points here, left as-is")
     raise SystemExit(0)
@@ -478,9 +543,11 @@ backup = "%s.bak-statusline-%s" % (path, time.strftime("%Y%m%d%H%M%S"))
 shutil.copy2(path, backup)
 print("backup: %s" % backup)
 
-if old is not None:
+if existing is not None:
     print("note: statusLine was already set by something else.")
     print("      Its command is preserved in the backup above.")
+
+if old is not None:
     # Replace the value in place, so formatting, key order, and every other
     # setting stay exactly as they were.
     enc_old, enc_new = json.dumps(old), json.dumps(command)
@@ -490,6 +557,26 @@ if old is not None:
         print("settings.json: statusLine.command replaced (one line changed)")
         raise SystemExit(0)
     print("settings.json: could not do a surgical edit; rewriting the file")
+elif "statusLine" not in data:
+    # No key at all: the only case an insert is right for. A key holding some
+    # other shape goes through the rewrite below instead, or we would end up
+    # with two statusLine keys. Serialising `data` would reformat every other
+    # key in the file, so add ours as text and leave the rest byte-for-byte,
+    # writing it only if it re-parses to exactly the object we intended.
+    patched = insert_key(raw, block)
+    want = dict(data)
+    want["statusLine"] = block
+    good = False
+    if patched is not None:
+        try:
+            good = json.loads(patched) == want
+        except ValueError:
+            good = False
+    if good:
+        io.open(path, "w", encoding="utf-8", newline="").write(patched)
+        print("settings.json: statusLine added (one key inserted)")
+        raise SystemExit(0)
+    print("settings.json: could not insert surgically; rewriting the file")
 
 data["statusLine"] = block
 io.open(path, "w", encoding="utf-8", newline="").write(
