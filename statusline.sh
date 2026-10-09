@@ -33,7 +33,7 @@ cat >"$tmp"
 # uninstalled or the path moves, and never let its output or exit code
 # touch our line.
 orca_cmd="$HOME/.orca/agent-hooks/claude-statusline.cmd"
-if [ -f "$orca_cmd" ]; then
+if [ "${STATUSLINE_SKIP_ORCA-}" != 1 ] && [ -f "$orca_cmd" ]; then
   "$orca_cmd" <"$tmp" >/dev/null 2>&1 || true
 fi
 
@@ -233,7 +233,7 @@ fi
 # model: blue bold and plain, mirroring the theme's right prompt. The effort
 # level rides alongside it in grey — a property of the model, not a fact of
 # its own, so it stays subordinate to the name.
-line="${line}  ${fg_blue}${b}${model:-Claude Code}${r}"
+line="${line}  ${fg_blue}${b}${model:-${STATUSLINE_MODEL_FALLBACK:-Claude Code}}${r}"
 [ -n "$effort" ] && line="${line} ${fg_grey}${effort}${r}"
 
 # --- session gauges: context left, then the two subscription windows ---

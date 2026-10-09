@@ -2,6 +2,7 @@
 
 A status line for [Claude Code](https://claude.com/claude-code), ported from the
 oh-my-posh **default** theme so the terminal and the agent look like one tool.
+It also configures the equivalent native footer in Codex CLI and Cursor CLI.
 
 ```
  playnook   main    Opus 5 (1M context) high | ctx █░░░░ 22% | 5h ███░░ 65% 2h13m | 7d ████░ 88% 3d23h
@@ -27,8 +28,18 @@ cd tammai-cc-status-line
 sh install.sh
 ```
 
+To enable Codex CLI and Cursor CLI without cloning or pulling the repository,
+run the installer directly:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main/install.sh | sh -s -- --codex --cursor
+```
+
 ```
 install.sh [--dir DIR]          install or re-install (idempotent)
+install.sh --codex              configure Codex CLI's native status line
+install.sh --cursor             configure Cursor CLI's custom status line
+install.sh --codex --cursor     configure both CLI status lines
 install.sh --no-font            skip the font check and install
 install.sh --no-terminal-font   leave Apple Terminal's profile font alone
 install.sh --uninstall          remove statusline.sh and the statusLine setting
@@ -50,6 +61,58 @@ font already covers the glyphs, so re-running stays a no-op.
 
 `--dir` (or `$CLAUDE_CONFIG_DIR`) installs into a config directory other than
 `~/.claude`.
+
+### Codex CLI
+
+Codex CLI has a native footer, rather than Claude Code's command hook. Configure
+it with:
+
+```sh
+sh install.sh --codex
+```
+
+To install or update Codex support directly, without cloning or pulling the
+repository:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main/install.sh | sh -s -- --codex
+```
+
+This writes only `tui.status_line` in `$CODEX_HOME/config.toml` (or
+`~/.codex/config.toml`) and takes a timestamped backup when that file already
+exists. The enabled fields are model and reasoning effort, directory, git branch,
+remaining context, and the five-hour and weekly limits. Run
+`sh install.sh --codex --uninstall` to remove that setting, or use Codex's
+`/statusline` command to change the native footer interactively.
+
+Pass both flags in one invocation to configure Codex CLI and Cursor CLI:
+
+```sh
+sh install.sh --codex --cursor
+```
+
+Codex does not accept an external status-line command or Claude's JSON payload,
+so the custom powerline styling, dirty-file count, and five-cell gauges are
+Claude Code-only.
+
+### Cursor CLI
+
+Cursor CLI supports a command-backed custom status line. Configure it with:
+
+```sh
+sh install.sh --cursor
+```
+
+This installs the renderer as `~/.cursor/statusline.sh` and sets `statusLine` in
+`~/.cursor/cli-config.json`. Set `CURSOR_CONFIG_DIR` to use a different Cursor
+configuration directory (or `XDG_CONFIG_HOME` on Linux). Existing config is
+backed up before it is changed. Run `sh install.sh --cursor --uninstall` to
+remove the managed setting and renderer.
+
+The renderer reads Cursor's session payload from stdin and uses the same
+powerline layout as Claude Code. Cursor CLI sends live token usage data to
+custom status line commands; rate limit fields may be absent and will be
+omitted. Its custom status line replaces the default footer while enabled.
 
 `--uninstall` deletes `statusline.sh` and drops the `statusLine` key. It backs
 the file up first, but unlike install it rewrites the JSON, so formatting is

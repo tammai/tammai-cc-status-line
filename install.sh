@@ -3,23 +3,29 @@
 #
 #   sh install.sh                 install (or re-install) into ~/.claude
 #   sh install.sh --dir DIR       install into another config directory
+#   sh install.sh --codex         configure Codex CLI's native footer
+#   sh install.sh --cursor        configure Cursor CLI's custom status line
 #   sh install.sh --uninstall     remove the status line
 #   sh install.sh --help
 #
 # Also works straight off the network, where it fetches the renderer itself:
 #   curl -fsSL https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main/install.sh | sh
 #
-# It only ever writes two things: statusline.sh, and the statusLine key of
-# settings.json. Every other key, and every hook, is preserved byte-for-byte.
+# For Claude it writes statusline.sh and the statusLine key of settings.json.
+# For Codex it writes only tui.status_line in config.toml. Other settings are
+# preserved byte-for-byte where the target value can be changed surgically.
 
 set -eu
 
-VERSION=1.1.1
+VERSION=1.2.0
 RAW_BASE=https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main
 
 self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || self_dir=.
 target=${CLAUDE_CONFIG_DIR:-}
 action=install
+client=claude
+want_codex=0
+want_cursor=0
 do_font=1
 do_terminal_font=1
 
@@ -30,13 +36,16 @@ NERD_PS_NAME=MesloLGSNF-Regular
 
 usage() {
   cat <<'USAGE'
-tammai-cc-status-line — a Claude Code status line
+tammai-cc-status-line — status lines for Claude Code, Codex CLI, and Cursor CLI
 
   path · git branch · model · effort · context used · 5h and 7d limits,
   each percentage with a small bar. Ported from the oh-my-posh default theme.
 
 Usage:
   install.sh [--dir DIR]     install or re-install (idempotent)
+  install.sh --codex         configure Codex CLI's native status line
+  install.sh --cursor        configure Cursor CLI's custom status line
+  install.sh --codex --cursor configure both CLI status lines
   install.sh --uninstall     remove statusline.sh and the statusLine setting
   install.sh --version
   install.sh --help
@@ -44,13 +53,16 @@ Usage:
 Options:
   --dir DIR            Claude Code config directory.
                        Default: $CLAUDE_CONFIG_DIR, else ~/.claude
+  --codex              Target Codex CLI. Uses $CODEX_HOME/config.toml,
+                       or ~/.codex/config.toml when CODEX_HOME is unset.
+  --cursor             Configure ~/.cursor/cli-config.json (or CURSOR_CONFIG_DIR).
   --no-font            Do not check for or install a Nerd Font.
   --no-terminal-font   Do not repoint Apple Terminal's profile at one.
 
-Needs: python3 or python (parses the status payload) and a truecolor terminal.
-git is optional. The separators and folder glyph need a Nerd Font; if none is
-installed, the platform's package manager is asked to add one. Nothing is
-bundled or downloaded here.
+Claude Code needs python3 or python (parses its status payload) and a truecolor
+terminal. Codex CLI uses its native footer and needs no renderer or font setup.
+git is optional. The Claude separators and folder glyph need a Nerd Font; if
+none is installed, the platform's package manager is asked to add one.
 USAGE
 }
 
@@ -59,6 +71,8 @@ while [ $# -gt 0 ]; do
     --dir) [ $# -ge 2 ] || { echo "install.sh: --dir needs a path" >&2; exit 2; }
            target=$2; shift 2 ;;
     --dir=*) target=${1#--dir=}; shift ;;
+    --codex) want_codex=1; shift ;;
+    --cursor) want_cursor=1; shift ;;
     --uninstall) action=uninstall; shift ;;
     --no-font) do_font=0; shift ;;
     --no-terminal-font) do_terminal_font=0; shift ;;
@@ -68,10 +82,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if { [ "$want_cursor" = 1 ] || [ "$want_codex" = 1 ]; } && [ -n "$target" ]; then
+  echo "install.sh: --dir applies only to Claude Code" >&2
+  exit 2
+fi
+
 # Resolve the default only now: --help and --version must work on a machine
 # with no HOME, and under `set -u` a default of $HOME/.claude would have died
 # reading it before the argument loop ever ran.
-if [ -z "$target" ]; then
+if [ "$want_cursor" = 0 ] && [ "$want_codex" = 0 ] && [ -z "$target" ]; then
   if [ -n "${HOME-}" ]; then
     target=$HOME/.claude
   else
@@ -83,7 +102,7 @@ fi
 # Create the directory up front for an install, then canonicalise: the
 # dispatcher should record a clean absolute path, not whatever relative or
 # dot-laden form happened to be typed on the command line.
-if [ "$action" = install ]; then
+if [ "$want_cursor" = 0 ] && [ "$want_codex" = 0 ] && [ "$action" = install ]; then
   # A path that exists but is not a directory would otherwise surface as a
   # bare mkdir error with no hint of which option caused it.
   if [ -e "$target" ] && [ ! -d "$target" ]; then
@@ -92,7 +111,7 @@ if [ "$action" = install ]; then
   fi
   mkdir -p "$target" || { echo "install.sh: cannot create $target" >&2; exit 1; }
 fi
-if [ -d "$target" ]; then
+if [ "$want_cursor" = 0 ] && [ "$want_codex" = 0 ] && [ -d "$target" ]; then
   target=$(CDPATH= cd -- "$target" && pwd)
 fi
 
@@ -119,6 +138,183 @@ if [ -z "$py" ]; then
   echo "  It edits settings.json safely, and the status line needs it to" >&2
   echo "  parse the payload Claude Code sends on stdin." >&2
   exit 1
+fi
+
+# Cursor CLI supports the same command-backed status line pattern and streams
+# its session payload to stdin. Reuse the renderer, installing it under the
+# Cursor config directory and managing only the statusLine key.
+if [ "$want_cursor" = 1 ]; then
+  if [ -n "${CURSOR_CONFIG_DIR-}" ]; then
+    cursor_config_dir=$CURSOR_CONFIG_DIR
+  elif [ -n "${XDG_CONFIG_HOME-}" ] && [ "$(uname -s 2>/dev/null || :)" = Linux ]; then
+    cursor_config_dir=$XDG_CONFIG_HOME/cursor
+  elif [ -n "${HOME-}" ]; then
+    cursor_config_dir=$HOME/.cursor
+  else
+    echo "install.sh: set CURSOR_CONFIG_DIR or HOME" >&2
+    exit 2
+  fi
+  cursor_settings=$cursor_config_dir/cli-config.json
+  cursor_renderer=$cursor_config_dir/statusline.sh
+  cursor_command=$cursor_config_dir/cursor-statusline.sh
+  if [ "$action" = install ]; then
+    mkdir -p "$cursor_config_dir"
+    if [ -f "$self_dir/statusline.sh" ]; then
+      cp "$self_dir/statusline.sh" "$cursor_renderer"
+    else
+      echo "fetching statusline.sh from $RAW_BASE"
+      if command -v curl >/dev/null 2>&1; then curl -fsSL "$RAW_BASE/statusline.sh" -o "$cursor_renderer"
+      elif command -v wget >/dev/null 2>&1; then wget -qO "$cursor_renderer" "$RAW_BASE/statusline.sh"
+      else echo "install.sh: need curl or wget to fetch statusline.sh" >&2; exit 1
+      fi
+    fi
+    chmod +x "$cursor_renderer"
+    cat >"$cursor_command" <<'SH'
+#!/bin/sh
+STATUSLINE_SKIP_ORCA=1
+STATUSLINE_MODEL_FALLBACK='Cursor Agent'
+export STATUSLINE_SKIP_ORCA STATUSLINE_MODEL_FALLBACK
+exec sh "$1"
+SH
+    chmod +x "$cursor_command"
+  fi
+  CURSOR_SETTINGS=$cursor_settings CURSOR_RENDERER=$cursor_renderer CURSOR_COMMAND=$cursor_command CURSOR_ACTION=$action "$py" - <<'PY'
+import io, json, os, shutil, time
+
+path = os.environ["CURSOR_SETTINGS"]
+renderer = os.environ["CURSOR_RENDERER"]
+command = os.environ["CURSOR_COMMAND"]
+action = os.environ["CURSOR_ACTION"]
+try:
+    raw = io.open(path, encoding="utf-8").read()
+    data = json.loads(raw)
+except FileNotFoundError:
+    raw, data = "", {}
+except ValueError as exc:
+    raise SystemExit("install.sh: %s is not valid JSON (%s)" % (path, exc))
+
+managed = {"type": "command", "command": 'sh "' + command.replace('"', '\\"') + '" "' + renderer.replace('"', '\\"') + '"', "padding": 0}
+current = data.get("statusLine")
+if action == "uninstall":
+    if current != managed:
+        print("cli-config.json: managed Cursor statusLine not found, nothing removed")
+        raise SystemExit(0)
+    del data["statusLine"]
+elif current == managed:
+    print("cli-config.json: Cursor status line already points here, left as-is")
+    raise SystemExit(0)
+else:
+    data["statusLine"] = managed
+
+if raw:
+    backup = "%s.bak-statusline-%s" % (path, time.strftime("%Y%m%d%H%M%S"))
+    shutil.copy2(path, backup)
+    print("backup: %s" % backup)
+io.open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2) + "\n")
+print("cli-config.json: Cursor statusLine %s" % ("removed" if action == "uninstall" else "set"))
+PY
+  if [ "$action" = uninstall ]; then
+    [ ! -f "$cursor_command" ] || rm -f "$cursor_command"
+    [ ! -f "$cursor_renderer" ] || rm -f "$cursor_renderer"
+    echo "Restart Cursor CLI for the change to take effect."
+  else
+    echo "Done. Restart Cursor CLI to load the custom status line."
+  fi
+  if [ "$want_codex" = 0 ]; then exit 0; fi
+fi
+
+# Codex owns its status line natively: unlike Claude Code it does not invoke
+# an external command or supply a JSON payload. Keep this renderer-free path
+# separate and edit only tui.status_line in its TOML config.
+if [ "$want_codex" = 1 ]; then
+  if [ -n "${CODEX_HOME-}" ]; then
+    codex_home=$CODEX_HOME
+  elif [ -n "${HOME-}" ]; then
+    codex_home=$HOME/.codex
+  else
+    echo "install.sh: neither \$CODEX_HOME nor \$HOME is set" >&2
+    exit 2
+  fi
+  codex_settings=$codex_home/config.toml
+  if [ "$action" = install ]; then
+    mkdir -p "$codex_home" || { echo "install.sh: cannot create $codex_home" >&2; exit 1; }
+  fi
+
+  CODEX_SETTINGS=$codex_settings CODEX_ACTION=$action "$py" - <<'PY'
+import io, os, re, shutil, time
+
+path = os.environ["CODEX_SETTINGS"]
+action = os.environ["CODEX_ACTION"]
+value = '["model-with-reasoning", "current-dir", "git-branch", "context-remaining", "five-hour-limit", "weekly-limit"]'
+
+try:
+    raw = io.open(path, encoding="utf-8").read()
+except FileNotFoundError:
+    raw = ""
+
+def table_end(text, start):
+    hit = re.search(r"(?m)^\s*\[[^\[][^\]]*\]\s*$", text[start:])
+    return start + hit.start() if hit else len(text)
+
+def value_range(text, start, end, pattern):
+    hit = re.search(pattern, text[start:end], re.M)
+    if not hit:
+        return None
+    a, b = start + hit.start(), start + hit.end()
+    # Also replace a multiline array value as one unit.
+    while text[a:b].count("[") > text[a:b].count("]") and b < len(text):
+        nl = text.find("\n", b)
+        b = len(text) if nl == -1 else nl + 1
+    return a, b
+
+table = re.search(r"(?m)^\s*\[tui\]\s*$", raw)
+if table:
+    start, end = table.end(), table_end(raw, table.end())
+    found = value_range(raw, start, end, r"^[ \t]*status_line\s*=.*(?:\n|$)")
+    line = "status_line = " + value + "\n"
+elif raw:
+    found = value_range(raw, 0, len(raw), r"^[ \t]*tui\.status_line\s*=.*(?:\n|$)")
+    line = "tui.status_line = " + value + "\n"
+else:
+    found = None
+    line = "[tui]\nstatus_line = " + value + "\n"
+
+if action == "uninstall":
+    if not found:
+        print("config.toml: no Codex status line managed here, nothing to remove")
+        raise SystemExit(0)
+    backup = "%s.bak-statusline-%s" % (path, time.strftime("%Y%m%d%H%M%S"))
+    shutil.copy2(path, backup)
+    a, b = found
+    io.open(path, "w", encoding="utf-8", newline="").write(raw[:a] + raw[b:])
+    print("backup: %s" % backup)
+    print("config.toml: Codex tui.status_line removed")
+    raise SystemExit(0)
+
+if found:
+    a, b = found
+    if raw[a:b] == line:
+        print("config.toml: Codex status line already points here, left as-is")
+        raise SystemExit(0)
+    new = raw[:a] + line + raw[b:]
+elif table:
+    new = raw[:table.end()] + "\n" + line + raw[table.end():]
+elif raw:
+    new = raw.rstrip() + "\n\n[tui]\n" + "status_line = " + value + "\n"
+else:
+    new = line
+
+if raw:
+    backup = "%s.bak-statusline-%s" % (path, time.strftime("%Y%m%d%H%M%S"))
+    shutil.copy2(path, backup)
+    print("backup: %s" % backup)
+io.open(path, "w", encoding="utf-8", newline="").write(new)
+print("config.toml: Codex tui.status_line set")
+PY
+
+  echo
+  echo "Done. Restart Codex CLI, or use /statusline to adjust the native footer interactively."
+  exit 0
 fi
 
 # ---------------------------------------------------------------- uninstall
