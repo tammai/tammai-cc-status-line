@@ -5,7 +5,7 @@ oh-my-posh **default** theme so the terminal and the agent look like one tool.
 It also configures the equivalent native footer in Codex CLI and Cursor CLI.
 
 ```
- playnook   main    Opus 5 (1M context) high | ctx █░░░░ 22% | 5h ███░░ 65% 2h13m | 7d ████░ 88% 3d23h
+ playnook   main    Opus 5 (1M context) high | ctx █░░░░ 22% | 5h ███░░ 65% 2h13m | 7d ████░ 88% 3d23h | $1.23/$14.80
 ```
 
 Path and git branch come from the theme. The rest is what a shell prompt has no
@@ -81,7 +81,9 @@ curl -fsSL https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main/i
 This writes only `tui.status_line` in `$CODEX_HOME/config.toml` (or
 `~/.codex/config.toml`) and takes a timestamped backup when that file already
 exists. The enabled fields are model and reasoning effort, directory, git branch,
-remaining context, and the five-hour and weekly limits. Run
+remaining context, the five-hour and weekly limits, and the estimated cost of
+the current thread. Codex has no project total: its footer only takes its own
+built-in items. Run
 `sh install.sh --codex --uninstall` to remove that setting, or use Codex's
 `/statusline` command to change the native footer interactively.
 
@@ -114,6 +116,13 @@ powerline layout as Claude Code. Cursor CLI sends live token usage data to
 custom status line commands; rate limit fields may be absent and will be
 omitted. Its custom status line replaces the default footer while enabled.
 
+Cursor shows no cost. Its payload carries `session_id`, `cwd`, `model` and
+`context_window`, but no `cost.total_cost_usd`, and `context_window` is how full
+the context is right now rather than what has been spent, so pricing it would
+be a wrong number. The cost segment is therefore left out, as for any payload
+without a cost. (Based on Cursor's forum and third-party mirrors of its spec; I
+have not captured a payload from a live Cursor CLI.)
+
 `--uninstall` deletes `statusline.sh` and drops the `statusLine` key. It backs
 the file up first, but unlike install it rewrites the JSON, so formatting is
 normalised even though every other key survives. If another tool owned
@@ -130,6 +139,7 @@ installer made at the time.
 | effort | `effort.level` | grey `#9090A1`, subordinate to the model name |
 | `ctx` | `context_window.used_percentage` | bar + value, see below |
 | `5h` / `7d` | `rate_limits.*.used_percentage` + `resets_at` | bar + value, reset time in grey |
+| `$session/$project` | `cost.total_cost_usd`, summed per project | white, session bold; the `/` in grey |
 
 One scale for all three gauges, in a single `set_pct_colour` function:
 
@@ -147,6 +157,33 @@ A dim `|` divides the three gauges from each other, and their labels are bold,
 so the eye lands on a label before it reads a number. The git block needs no
 divider — its powerline cap already closes it.
 
+### Cost
+
+`$1.23/$14.80` — what this session has spent, then what the project has. Money
+has no scale to be judged against, so unlike the gauges it takes no colour.
+
+The payload carries only the running total of the current session, so the
+project figure is built by the script. Each render stores that total in its own
+file, `$CLAUDE_CONFIG_DIR/statusline-cost/<project>/<session_id>` (default
+`~/.claude/...`), and the project is the sum of the files in its folder. A
+project is `workspace.project_dir`, falling back to the current directory. If a
+session's total drops below what was stored — a resumed session whose counter
+restarted — the earlier amount is kept, so nothing is lost.
+
+**History.** The first time a project is rendered, the script looks at that
+project's earlier sessions in `~/.claude/projects/<dir>/*.jsonl` and adds them.
+Transcripts record tokens, not dollars, so these are **estimates**: input,
+output and both cache-write tiers and cache reads, multiplied by the per-model
+`PRICES` table at the top of the Python in `statusline.sh` (rates as of
+2026-10-06). A model missing from the table counts as $0 — add a row when a new
+one appears. Sessions already recorded are skipped, and the live one is never
+estimated, since the payload gives its exact figure. The scan is newest first
+and yields after 2.5s, picking up on the next render, then writes a `.seeded`
+marker so it is not repeated; your biggest projects take well under a second.
+
+The uninstaller leaves `statusline-cost` in place. Delete it to reset the
+project totals — the next render rebuilds them from the transcripts.
+
 The theme's session (username) segment is deliberately dropped: on a single-user
 machine it spends width to say nothing.
 
@@ -160,6 +197,9 @@ Nothing here is load-bearing, and nothing is invented when a field is missing:
 | not a subscriber (`rate_limits` absent) | no limit segments |
 | a window with no `resets_at` | percentage only, no reset text |
 | a model without reasoning effort | no effort text |
+| no `cost.total_cost_usd` | no cost segment |
+| cost but no `session_id`, or the cache folder is unwritable | session cost only, no `/$project` |
+| no transcripts for the project | project cost is just what has been recorded live |
 | not in a git repo | no git segment |
 | no python at all | folder and branch from `$PWD`; model and gauges omitted |
 

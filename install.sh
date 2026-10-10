@@ -245,7 +245,7 @@ import io, os, re, shutil, time
 
 path = os.environ["CODEX_SETTINGS"]
 action = os.environ["CODEX_ACTION"]
-value = '["model-with-reasoning", "current-dir", "git-branch", "context-remaining", "five-hour-limit", "weekly-limit"]'
+value = '["model-with-reasoning", "current-dir", "git-branch", "context-remaining", "five-hour-limit", "weekly-limit", "estimated-thread-cost"]'
 
 try:
     raw = io.open(path, encoding="utf-8").read()
