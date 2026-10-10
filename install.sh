@@ -17,7 +17,7 @@
 
 set -eu
 
-VERSION=1.2.0
+VERSION=1.3.0
 RAW_BASE=https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main
 
 self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || self_dir=.
@@ -245,7 +245,7 @@ import io, os, re, shutil, time
 
 path = os.environ["CODEX_SETTINGS"]
 action = os.environ["CODEX_ACTION"]
-value = '["model-with-reasoning", "current-dir", "git-branch", "context-remaining", "five-hour-limit", "weekly-limit"]'
+value = '["model-with-reasoning", "current-dir", "git-branch", "context-remaining", "five-hour-limit", "weekly-limit", "estimated-thread-cost"]'
 
 try:
     raw = io.open(path, encoding="utf-8").read()
