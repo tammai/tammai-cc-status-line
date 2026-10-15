@@ -17,7 +17,7 @@
 
 set -eu
 
-VERSION=1.3.0
+VERSION=1.4.0
 RAW_BASE=https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main
 
 # Beside-the-script files are trusted only when this really is the script on
