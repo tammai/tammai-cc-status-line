@@ -17,10 +17,16 @@
 
 set -eu
 
-VERSION=1.3.0
+VERSION=1.4.0
 RAW_BASE=https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main
 
-self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || self_dir=.
+# Beside-the-script files are trusted only when this really is the script on
+# disk. Piped from curl, $0 is the shell, and dirname of that is the current
+# directory: whatever install.sh sits there would be run, or its renderer copied.
+case $0 in
+  *install.sh) self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || self_dir=/dev/null ;;
+  *) self_dir=/dev/null ;;   # nothing can exist under it, so the fetch path runs
+esac
 target=${CLAUDE_CONFIG_DIR:-}
 action=install
 client=claude
@@ -28,11 +34,13 @@ want_codex=0
 want_cursor=0
 do_font=1
 do_terminal_font=1
+glyph_answer=
 
 # The font the package manager is asked for, and the PostScript name Apple
 # Terminal wants for it — which is not the name shown in a font menu.
 NERD_CASK=font-meslo-lg-nerd-font
 NERD_PS_NAME=MesloLGSNF-Regular
+NERD_FAMILY="MesloLGS Nerd Font"
 
 usage() {
   cat <<'USAGE'
@@ -57,7 +65,12 @@ Options:
                        or ~/.codex/config.toml when CODEX_HOME is unset.
   --cursor             Configure ~/.cursor/cli-config.json (or CURSOR_CONFIG_DIR).
   --no-font            Do not check for or install a Nerd Font.
-  --no-terminal-font   Do not repoint Apple Terminal's profile at one.
+  --no-terminal-font   Do not change the terminal's font (Apple Terminal, VS Code)
+                       and do not print the font note. --plain and --nerd
+                       still apply.
+  --plain              Use flat colour blocks instead of rounded ends in this
+                       terminal, if it shows ? boxes. Remembered per terminal.
+  --nerd               Undo --plain for this terminal.
 
 Claude Code needs python3 or python (parses its status payload) and a truecolor
 terminal. Codex CLI uses its native footer and needs no renderer or font setup.
@@ -76,11 +89,18 @@ while [ $# -gt 0 ]; do
     --uninstall) action=uninstall; shift ;;
     --no-font) do_font=0; shift ;;
     --no-terminal-font) do_terminal_font=0; shift ;;
+    --nerd) glyph_answer=nerd; shift ;;
+    --plain) glyph_answer=plain; shift ;;
     --version) echo "$VERSION"; exit 0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "install.sh: unknown option '$1' (try --help)" >&2; exit 2 ;;
   esac
 done
+
+if { [ "$want_cursor" = 1 ] || [ "$want_codex" = 1 ]; } && [ -n "$glyph_answer" ]; then
+  echo "install.sh: --plain and --nerd apply only to Claude Code" >&2
+  exit 2
+fi
 
 if { [ "$want_cursor" = 1 ] || [ "$want_codex" = 1 ]; } && [ -n "$target" ]; then
   echo "install.sh: --dir applies only to Claude Code" >&2
@@ -317,6 +337,274 @@ PY
   exit 0
 fi
 
+# Git Bash and MSYS report MINGW64_NT-… and MSYS_NT-…, Cygwin CYGWIN_NT-…;
+# all three are Windows for our purposes. `uname` is assumed by little else
+# here, so a missing one degrades to "other" rather than killing the script.
+os_kind() {
+  case $(uname -s 2>/dev/null || echo unknown) in
+    Darwin) echo darwin ;;
+    Linux) echo linux ;;
+    MINGW* | MSYS* | CYGWIN* | Windows_NT) echo windows ;;
+    *) echo other ;;
+  esac
+}
+
+# VS Code's integrated terminal (and Cursor, VSCodium, Insiders) keeps its font
+# in the editor's user settings.json, which is JSON with comments and trailing
+# commas — so it is edited as text, one key, and never re-serialised. An
+# existing font stays first, with the Nerd Font appended: a font stack falls
+# back glyph by glyph, so text looks as it did and only the icons come from
+# Meslo. Not done over SSH or in a dev container, where the settings file on
+# this machine is not the one that applies. STATUSLINE_VSCODE_SETTINGS points
+# it at another file, which is how it is tested. The same edit, run with
+# ACTION=revert, takes back exactly what it wrote and nothing else.
+vscode_base() {
+  [ -n "${HOME-}" ] || return 1
+  case $(os_kind) in
+    darwin) vs_base=$HOME/Library/Application\ Support ;;
+    linux) vs_base=${XDG_CONFIG_HOME:-$HOME/.config} ;;
+    *) return 1 ;;
+  esac
+}
+
+# $1 is set or revert, $2 the settings file.
+vscode_edit() {
+  ACTION=$1 SETTINGS=$2 FONT=$NERD_FAMILY RECORD=$target/statusline-vscode-font "$py" - <<'PY'
+import io, json, os, shutil, sys, time
+
+path = os.environ["SETTINGS"]
+font = os.environ["FONT"]
+action = os.environ.get("ACTION", "set")
+KEY = "terminal.integrated.fontFamily"
+
+
+def scan(t):
+    """Walk JSONC text. Returns (open_brace, members, found) where found is
+    (value_start, value_end) of KEY's string value, or "other" for a value
+    that is not a string, or None; plus a copy with comments and trailing commas
+    removed, which json.loads must accept. Raises ValueError when malformed."""
+    i, n, depth, prev = 0, len(t), 0, ""
+    open_brace, members, found = -1, 0, None
+    out = []
+    while i < n:
+        c = t[i]
+        if c in " \t\r\n\ufeff":
+            out.append(c)
+            i += 1
+        elif t.startswith("//", i):
+            j = t.find("\n", i)
+            i = n if j < 0 else j
+        elif t.startswith("/*", i):
+            j = t.find("*/", i + 2)
+            if j < 0:
+                raise ValueError("unterminated comment")
+            i = j + 2
+        elif c == '"':
+            j = i + 1
+            while j < n and t[j] != '"':
+                j += 2 if t[j] == "\\" else 1
+            if j >= n:
+                raise ValueError("unterminated string")
+            end = j + 1
+            if depth == 1 and prev in "{,":
+                k = end
+                while k < n and (t[k] in " \t\r\n" or t.startswith("/*", k) or t.startswith("//", k)):
+                    if t.startswith("/*", k):
+                        k = t.find("*/", k + 2) + 2
+                    elif t.startswith("//", k):
+                        k = t.find("\n", k)
+                        k = n if k < 0 else k
+                    else:
+                        k += 1
+                if k < n and t[k] == ":":
+                    members += 1
+                    if json.loads(t[i:end]) == KEY:
+                        v = k + 1
+                        while v < n and t[v] in " \t\r\n":
+                            v += 1
+                        if v < n and t[v] == '"':
+                            e = v + 1
+                            while e < n and t[e] != '"':
+                                e += 2 if t[e] == "\\" else 1
+                            found = (v, e + 1, i)
+                        else:
+                            found = "other"
+            out.append(t[i:end])
+            i, prev = end, '"'
+        else:
+            if c in "{[":
+                if c == "{" and depth == 0 and open_brace < 0:
+                    open_brace = i
+                depth += 1
+            elif c in "}]":
+                depth -= 1
+                if depth < 0:
+                    raise ValueError("unbalanced")
+                k = len(out) - 1
+                while k >= 0 and out[k].strip() == "" and len(out[k]) == 1:
+                    k -= 1
+                if k >= 0 and out[k] == ",":
+                    del out[k]
+            out.append(c)
+            prev = c
+            i += 1
+    if depth != 0:
+        raise ValueError("unbalanced")
+    clean = "".join(out)
+    json.loads(clean)
+    return open_brace, members, found, clean
+
+
+def done(msg, code=0):
+    print(msg)
+    sys.exit(code)
+
+
+try:
+    raw = io.open(path, encoding="utf-8", newline="").read()
+except FileNotFoundError:
+    raw = None
+
+nl = "\r\n" if raw and "\r\n" in raw else "\n"
+
+if action == "revert":
+    # Undo only what this installer wrote: its default value when it created the
+    # key, or the fallback it appended to a font that was already there.
+    if raw is None or not raw.strip():
+        sys.exit(0)
+    try:
+        brace, members, found, _ = scan(raw)
+    except ValueError:
+        sys.exit(0)
+    if found in (None, "other"):
+        sys.exit(0)
+    cur = json.loads(raw[found[0]:found[1]])
+    suffix = ", '%s'" % font
+    if cur == "'%s', monospace" % font:
+        start, end = found[2], found[1]
+        while end < len(raw) and raw[end] in " \t":
+            end += 1
+        if end < len(raw) and raw[end] == ",":
+            end += 1
+        tail = end
+        while tail < len(raw) and raw[tail] in " \t":
+            tail += 1
+        ls = start
+        while ls > 0 and raw[ls - 1] in " \t":
+            ls -= 1
+        if (ls == 0 or raw[ls - 1] == "\n") and raw.startswith(("\r\n", "\n"), tail):
+            start, end = ls, tail + (2 if raw.startswith("\r\n", tail) else 1)
+        new = raw[:start] + raw[end:]
+        gone = True
+    elif cur.endswith(suffix) and len(cur) > len(suffix):
+        new = raw[:found[0]] + json.dumps(cur[:-len(suffix)]) + raw[found[1]:]
+        gone = False
+    else:
+        sys.exit(0)                      # a value of the person's own
+    try:
+        _, _, f2, _ = scan(new)
+        ok = (f2 is None) if gone else (f2 not in (None, "other") and json.loads(new[f2[0]:f2[1]]) == cur[:-len(suffix)])
+    except ValueError:
+        ok = False
+    if not ok:
+        done("settings.json: could not undo the font in %s safely; left alone" % path, 3)
+    backup = "%s.bak-statusline-%s" % (path, time.strftime("%Y%m%d%H%M%S"))
+    shutil.copy2(path, backup)
+    print("backup: %s" % backup)
+    io.open(path, "w", encoding="utf-8", newline="").write(new)
+    print("font: VS Code terminal font restored in %s" % path)
+    sys.exit(0)
+
+if raw is None or not raw.strip():
+    new = '{\n  "%s": "\'%s\', monospace"\n}\n' % (KEY, font)
+else:
+    try:
+        brace, members, found, _ = scan(raw)
+    except ValueError as exc:
+        done("settings.json: %s did not parse (%s); left alone" % (path, exc), 3)
+    if brace < 0:
+        done("settings.json: %s is not a JSON object; left alone" % path, 3)
+    if found == "other":
+        done("settings.json: %s is not a plain string; left alone" % KEY, 3)
+    if found:
+        cur = json.loads(raw[found[0]:found[1]])
+        if "nerd" in cur.lower() or font.lower() in cur.lower():
+            done("font: VS Code already uses a Nerd Font in the terminal")
+        val = (cur.rstrip().rstrip(",") + ", '%s'" % font) if cur.strip() else "'%s', monospace" % font
+        new = raw[:found[0]] + json.dumps(val) + raw[found[1]:]
+    else:
+        val = json.dumps("'%s', monospace" % font)
+        sep = "," if members else ""
+        new = (raw[:brace + 1] + nl + '  "%s": %s%s' % (KEY, val, sep)
+               + (raw[brace + 1:] if members else nl + raw[brace + 1:]))
+
+# Prove the result still parses and says what it should before writing it.
+try:
+    b2, _, f2, _ = scan(new)
+    ok = f2 not in (None, "other") and font in json.loads(new[f2[0]:f2[1]])
+except ValueError:
+    ok = False
+if not ok:
+    done("settings.json: could not edit %s safely; left alone" % path, 3)
+
+if raw is not None:
+    backup = "%s.bak-statusline-%s" % (path, time.strftime("%Y%m%d%H%M%S"))
+    shutil.copy2(path, backup)
+    print("backup: %s" % backup)
+io.open(path, "w", encoding="utf-8", newline="").write(new)
+rec = os.environ.get("RECORD")
+if rec:
+    try:
+        have = io.open(rec, encoding="utf-8").read().split("\n")
+    except OSError:
+        have = []
+    if path not in have:
+        io.open(rec, "a", encoding="utf-8").write(path + "\n")
+print("font: VS Code terminal font now includes %s (applies to open terminals)" % font)
+PY
+}
+
+vscode_terminal_font() {
+  [ "${TERM_PROGRAM-}" = vscode ] || return 2
+  [ -z "${SSH_CONNECTION-}${SSH_TTY-}${REMOTE_CONTAINERS-}" ] || return 2
+  vs_settings=${STATUSLINE_VSCODE_SETTINGS-}
+  if [ -z "$vs_settings" ]; then
+    vscode_base || return 2
+    case ${__CFBundleIdentifier-} in
+      com.microsoft.VSCodeInsiders) vs_app="Code - Insiders" ;;
+      com.vscodium | com.visualstudio.code.oss) vs_app=VSCodium ;;
+      com.todesktop.230313mzl4w4u92) vs_app=Cursor ;;
+      com.microsoft.VSCode) vs_app=Code ;;
+      '')   # no bundle id (Linux): go by where the editor's own node lives
+        case ${VSCODE_GIT_ASKPASS_NODE-} in
+          *[Cc]ursor*) vs_app=Cursor ;;
+          *[Ii]nsiders*) vs_app="Code - Insiders" ;;
+          *[Cc]odium*) vs_app=VSCodium ;;
+          */code/* | */Code/* | */code | *[Vv]isual*[Ss]tudio*[Cc]ode*) vs_app=Code ;;
+          *) return 2 ;;   # cannot tell which editor: edit none rather than guess
+        esac ;;
+      *) return 2 ;;
+    esac
+    [ -d "$vs_base/$vs_app/User" ] || return 2
+    vs_settings=$vs_base/$vs_app/User/settings.json
+  fi
+  fontq ps "$NERD_PS_NAME" || return 2   # nothing installed to point it at
+  vscode_edit set "$vs_settings"
+}
+
+# Uninstall reverts only the files the install recorded editing, and within
+# them only a value this installer wrote. A font the person set themselves —
+# even one that happens to read like ours — was never recorded, so is kept.
+vscode_font_revert() {
+  vs_record=$target/statusline-vscode-font
+  [ -f "$vs_record" ] || return 0
+  while IFS= read -r vs_file || [ -n "$vs_file" ]; do
+    [ -n "$vs_file" ] && [ -f "$vs_file" ] || continue
+    vscode_edit revert "$vs_file" || :
+  done <"$vs_record"
+  rm -f "$vs_record"
+}
+
 # ---------------------------------------------------------------- uninstall
 if [ "$action" = uninstall ]; then
   if [ -f "$settings" ]; then
@@ -334,6 +622,13 @@ except ValueError as exc:
 
 if "statusLine" not in data:
     print("settings.json: no statusLine key, nothing to remove")
+    raise SystemExit(0)
+
+# Only take out a line that is ours. Something else may own statusLine now.
+current = data["statusLine"]
+cmd = current.get("command", "") if isinstance(current, dict) else ""
+if "statusline.sh" not in str(cmd):
+    print("settings.json: statusLine is not ours (%s), left alone" % (cmd or current))
     raise SystemExit(0)
 
 backup = "%s.bak-statusline-%s" % (path, time.strftime("%Y%m%d%H%M%S"))
@@ -355,9 +650,14 @@ PY
     echo "settings.json: not found at $settings"
   fi
 
+  vscode_font_revert
   if [ -f "$dest" ]; then
     rm -f "$dest"
     echo "removed: $dest"
+  fi
+  if [ -f "$target/statusline-plain" ]; then
+    rm -f "$target/statusline-plain"
+    echo "removed: $target/statusline-plain"
   fi
   echo
   echo "Uninstalled. Restart Claude Code to drop the line."
@@ -516,18 +816,6 @@ sys.exit(2)
 PY
 }
 
-# Git Bash and MSYS report MINGW64_NT-… and MSYS_NT-…, Cygwin CYGWIN_NT-…;
-# all three are Windows for our purposes. `uname` is assumed by little else
-# here, so a missing one degrades to "other" rather than killing the script.
-os_kind() {
-  case $(uname -s 2>/dev/null || echo unknown) in
-    Darwin) echo darwin ;;
-    Linux) echo linux ;;
-    MINGW* | MSYS* | CYGWIN* | Windows_NT) echo windows ;;
-    *) echo other ;;
-  esac
-}
-
 font_hint() {
   cat >&2 <<EOF
 font: install a Nerd Font, then re-run this script.
@@ -584,24 +872,69 @@ apple_terminal_font() {
   return 0
 }
 
-# Windows Terminal keeps the face in its own settings.json, and the old
-# console keeps it in the registry per-executable. Neither is safe to edit
-# from here, so say where it is and let the reader do it.
-windows_terminal_hint() {
-  cat <<EOF
-font: point the terminal at it, or the glyphs stay boxes:
-      Windows Terminal — Settings, Defaults, Appearance, Font face
-      (or "font": { "face": "MesloLGS Nerd Font" } in its settings.json)
-      Git Bash console — right-click the title bar, Options, Text
-EOF
+# The rounded ends, the arrow and the folder are Nerd Font glyphs. They are the
+# default everywhere: the font is installed above, and Apple Terminal is pointed
+# at it. A terminal that is set to some other font draws them as ? boxes, and
+# nothing can ask a terminal which font it uses, so there is an opt-out rather
+# than a question: `install.sh --plain` records this terminal in
+# statusline-plain, beside statusline.sh, and the renderer uses flat blocks
+# there. `install.sh --nerd` takes it back out.
+glyph_marker=$target/statusline-plain
+glyph_key=${TERM_PROGRAM:-${WT_SESSION:+WindowsTerminal}}
+glyph_key=${glyph_key:-unknown}
+[ "$glyph_key" != vscode ] || glyph_key=vscode${__CFBundleIdentifier:+:$__CFBundleIdentifier}
+
+glyph_mark() {
+  [ -f "$glyph_marker" ] && grep -qxF "$glyph_key" "$glyph_marker" && return 0
+  echo "$glyph_key" >>"$glyph_marker" 2>/dev/null || {
+    echo "font: could not write $glyph_marker" >&2
+    return 1
+  }
+}
+
+glyph_unmark() {
+  [ -f "$glyph_marker" ] || return 0
+  grep -vxF "$glyph_key" "$glyph_marker" >"$glyph_marker.tmp" || :
+  if [ -s "$glyph_marker.tmp" ]; then mv "$glyph_marker.tmp" "$glyph_marker"
+  else rm -f "$glyph_marker.tmp" "$glyph_marker"
+  fi
+}
+
+glyph_where() {
+  case ${TERM_PROGRAM-} in
+    Orca) echo "Orca: Settings, Terminal, Font family" ;;
+    iTerm.app) echo "iTerm2: Settings, Profiles, Text, Font" ;;
+    vscode) echo 'VS Code: setting "terminal.integrated.fontFamily"' ;;
+    *) echo "your terminal's font setting" ;;
+  esac
+}
+
+glyph_report() {
+  case $glyph_answer in
+    plain)
+      if glyph_mark; then
+        echo "font: flat blocks for $glyph_key (recorded in $glyph_marker)"
+      else
+        echo "font: flat blocks NOT set for $glyph_key; run with --plain again once $target is writable" >&2
+      fi ;;
+    nerd)
+      glyph_unmark
+      echo "font: rounded ends for $glyph_key" ;;
+    *)
+      case ${TERM_PROGRAM-}:${TERM-} in
+        ghostty:* | WezTerm:* | *:xterm-ghostty | *:xterm-kitty) ;;
+        *)
+          echo "font: rounded ends need this terminal's font set to a Nerd Font"
+          echo "      (MesloLGS Nerd Font) - $(glyph_where). If you see ? boxes"
+          echo "      instead, set that, or run: sh install.sh --plain" ;;
+      esac ;;
+  esac
 }
 
 if [ "$do_font" = 1 ]; then
-  font_was_missing=0
   if found=$(fontq scan); then
     echo "font: $found already covers the glyphs"
   else
-    font_was_missing=1
     echo "font: nothing installed carries U+E0B6, U+E0B4 and U+EA83"
     rc=0
     font_auto_install || rc=$?
@@ -617,15 +950,22 @@ if [ "$do_font" = 1 ]; then
     fi
   fi
 
-  # A font on disk is only half of it; the terminal has to name it. macOS can
-  # be done here. Windows cannot, so it is described — and only when the font
-  # was missing, since an established setup does not need telling twice.
-  if [ "$do_terminal_font" = 1 ]; then
-    case $(os_kind) in
-      darwin) apple_terminal_font || : ;;
-      windows) [ "$font_was_missing" = 0 ] || windows_terminal_hint ;;
-    esac
+fi
+
+# A font on disk is only half of it; the terminal has to name it. Apple
+# Terminal and VS Code are done here; anywhere else the person is told once,
+# and given the --plain escape hatch. Independent of --no-font.
+if [ "$do_terminal_font" = 1 ]; then
+  apple_done=0
+  if [ "$(os_kind)" = darwin ] && [ "${TERM_PROGRAM-}" = Apple_Terminal ] \
+    && [ "$glyph_answer" != plain ] && apple_terminal_font; then
+    apple_done=1
+  elif [ "$glyph_answer" != plain ] && vscode_terminal_font; then
+    apple_done=1
   fi
+  [ "$apple_done" = 1 ] || glyph_report
+elif [ -n "$glyph_answer" ]; then
+  glyph_report   # --plain and --nerd are not about editing the terminal
 fi
 
 # ------------------------------------------------------------------ install

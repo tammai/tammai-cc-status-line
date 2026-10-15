@@ -59,6 +59,36 @@ asked for a Nerd Font, and on Apple Terminal the profile is pointed at it.
 `--no-font` and `--no-terminal-font` opt out of each. Neither is reached when a
 font already covers the glyphs, so re-running stays a no-op.
 
+The rounded ends, the arrow and the folder are Nerd Font glyphs, and they are
+the default. The installer puts a Nerd Font on the machine and sets the
+terminal's font for you where it can do so safely:
+
+- **Apple Terminal:** the profile is pointed at the font.
+- **VS Code, Cursor, VSCodium:** `terminal.integrated.fontFamily` in the user
+  `settings.json` gets the Nerd Font appended, so your own font still draws the
+  text and only the icons come from Meslo. Just that one key is edited, as
+  text, so comments, trailing commas and line endings survive; a backup is
+  made first, and a file it cannot parse or a non-string value is left alone.
+  Skipped over SSH and in dev containers, and when the editor cannot be
+  identified (no bundle id and no recognisable path), rather than guessing.
+- **Ghostty, WezTerm, kitty:** nothing to do, they bundle a Nerd Font fallback.
+
+In any other terminal (Orca, iTerm2, Windows Terminal, ...) the installer
+cannot change the font, so it says so; set the terminal's own font to a Nerd
+Font such as MesloLGS Nerd Font. A terminal set to some other font draws each
+glyph as a `?` box, and nothing can ask a terminal which font it uses.
+
+If you see boxes and would rather not change the font:
+
+```sh
+sh install.sh --plain     # flat colour blocks in this terminal, remembered
+sh install.sh --nerd      # back to rounded ends
+```
+
+`--plain` records the terminal in `statusline-plain` next to `statusline.sh`.
+`STATUSLINE_GLYPHS=plain` (or `nerd`) overrides it at run time, and
+`uninstall.sh` removes the record along with the script.
+
 `--dir` (or `$CLAUDE_CONFIG_DIR`) installs into a config directory other than
 `~/.claude`.
 
@@ -123,11 +153,36 @@ be a wrong number. The cost segment is therefore left out, as for any payload
 without a cost. (Based on Cursor's forum and third-party mirrors of its spec; I
 have not captured a payload from a live Cursor CLI.)
 
-`--uninstall` deletes `statusline.sh` and drops the `statusLine` key. It backs
-the file up first, but unlike install it rewrites the JSON, so formatting is
-normalised even though every other key survives. If another tool owned
-`statusLine` before you installed this, restore its command from the backup the
-installer made at the time.
+`--uninstall` deletes `statusline.sh` and drops the `statusLine` key, but only
+when that key points at this renderer; one that something else owns is left
+alone. It backs the file up first, but unlike install it rewrites the JSON, so
+formatting is normalised even though every other key survives. If another tool
+owned `statusLine` before you installed this, restore its command from the
+backup the installer made at the time.
+
+`uninstall.sh` is the same thing as its own entry point, and can cover all
+three CLIs at once:
+
+```sh
+sh uninstall.sh                 # Claude Code
+sh uninstall.sh --all           # Claude Code, Codex CLI, Cursor CLI
+sh uninstall.sh --font          # also brew-uninstall the Nerd Font cask
+curl -fsSL https://raw.githubusercontent.com/tammai/tammai-cc-status-line/main/uninstall.sh | sh
+```
+
+It also undoes the VS Code font edit. The installer records each
+`settings.json` it changes (in `statusline-vscode-font` next to the script), and
+uninstall reverts only those files, and only the value it wrote: the fallback
+appended to your font is stripped, and a key it created is removed. A font you
+set yourself is never touched, even one that reads like ours, and a backup is
+made first.
+
+It keeps any Nerd Font and Apple Terminal's font setting unless `--font` is
+given, and then removes only the Homebrew cask.
+
+A long branch name is cut to 24 characters with a trailing `…`, so it cannot
+push the model and the gauges off the line. `STATUSLINE_BRANCH_MAX=NN` changes
+the limit.
 
 ## What it shows
 
