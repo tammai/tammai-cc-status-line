@@ -365,6 +365,25 @@ INNER
   fi
 fi
 
+# A long branch name would crowd out everything after it, so cut it to
+# STATUSLINE_BRANCH_MAX (default 24) characters, ending in an ellipsis; the
+# start is the part that identifies it. The shell's own length is bytes in
+# some shells and characters in others, so it is only a cheap pre-check (bytes
+# never undercount); python does the exact cut, and only for a name that might
+# be too long, so a normal branch costs no process. A name that is not too long
+# comes back untouched, and with no python the name is simply left whole.
+branch_max=${STATUSLINE_BRANCH_MAX:-24}
+case $branch_max in '' | *[!0-9]* | 0) branch_max=24 ;; esac
+if [ -n "$py" ] && [ "${#branch}" -gt "$branch_max" ]; then
+  branch_cut=$("$py" -c '
+import sys
+b, m = sys.argv[1], int(sys.argv[2])
+if len(b) > m:
+    b = b[:m - 1] + "\u2026"
+sys.stdout.buffer.write(b.encode("utf-8"))
+' "$branch" "$branch_max" 2>/dev/null) && [ -n "$branch_cut" ] && branch=$branch_cut
+fi
+
 # --- oh-my-posh default theme palette, prebuilt as strings ---
 esc=$(printf '\033')
 r="${esc}[0m"
@@ -385,13 +404,45 @@ bg_yellow="${esc}[48;2;243;174;53m"
 bg_orange="${esc}[48;2;240;118;35m"
 bg_green="${esc}[48;2;89;201;165m"
 
-# U+E0B6 leading diamond, U+E0B0 separator, U+E0B4 trailing diamond,
-# U+EA83 folder, U+270E pencil, U+2588 full block, U+2591 light shade. One
+# Glyph set. The Nerd Font set (U+E0B6 leading cap, U+E0B0 separator, U+E0B4
+# trailing cap, U+EA83 folder) is the default: the installer puts a Nerd Font on
+# the machine and points Apple Terminal at it. It lives in the Private Use Area,
+# which no terminal falls back for, so a terminal set to some other font draws
+# every one as a box — and nothing here can ask the terminal what font it uses.
+# The way out is flat colour blocks and a standard Unicode folder mark
+# (U+25B8), which every terminal draws, chosen by either of:
+#   STATUSLINE_GLYPHS=plain   (or =nerd to force the default)
+#   a terminal listed in statusline-plain, beside this script — what
+#     `install.sh --plain` writes
+glyph_set=nerd
+case ${STATUSLINE_GLYPHS-} in
+  nerd | plain) glyph_set=$STATUSLINE_GLYPHS ;;
+  *)
+    glyph_key=${TERM_PROGRAM:-${WT_SESSION:+WindowsTerminal}}
+    glyph_key=${glyph_key:-unknown}
+    [ "$glyph_key" != vscode ] || glyph_key=vscode${__CFBundleIdentifier:+:$__CFBundleIdentifier}
+    case $0 in */*) glyph_marker=${0%/*}/statusline-plain ;; *) glyph_marker=./statusline-plain ;; esac
+    if [ -r "$glyph_marker" ]; then
+      while IFS= read -r glyph_line || [ -n "$glyph_line" ]; do
+        [ "$glyph_line" = "$glyph_key" ] && { glyph_set=plain; break; }
+      done <"$glyph_marker"
+    fi ;;
+esac
+# U+270E pencil, U+2588 full block, U+2591 light shade are in every font. One
 # printf, split on spaces — building these separately would be a fork apiece.
-glyphs=$(printf '\356\202\266 \356\202\260 \356\202\264 \356\252\203 \342\234\216 \342\226\210 \342\226\221')
+if [ "$glyph_set" = nerd ]; then
+  glyphs=$(printf '\356\202\266 \356\202\260 \356\202\264 \356\252\203 \342\234\216 \342\226\210 \342\226\221')
+else
+  # Plain set: no caps and no separator. The thin shapes a stock font offers
+  # for them (U+25D6, U+276F) draw as slivers, not as the full-height
+  # diamond and arrow, so the coloured blocks simply meet flat. Placeholders
+  # keep the fields aligned for the split below; they are blanked after it.
+  glyphs=$(printf '. . . \342\226\270 \342\234\216 \342\226\210 \342\226\221')
+fi
 # shellcheck disable=SC2086
 set -- $glyphs
 lead=$1 arrow=$2 trail=$3 folder_icon=$4 dirty_icon=$5 bar_on_cell=$6 bar_off_cell=$7
+[ "$glyph_set" = nerd ] || { lead= arrow= trail=; }
 
 # Section divider: dim, so it groups without competing with the values.
 sep="${fg_grey}|${r}"
