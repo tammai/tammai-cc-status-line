@@ -326,12 +326,15 @@ instance, may use that hook to collect the payload and print nothing. Two things
 make that survivable:
 
 - The installer prints a warning and keeps the previous command in its backup.
-- If `~/.orca/agent-hooks/claude-statusline.cmd` exists, `statusline.sh` feeds it
-  the payload on its own stdin first, discards its output and exit code, and then
-  renders. So that tool keeps working alongside this line. On a machine without
-  it, the guard skips it silently.
+- If Orca's reporter exists, `statusline.sh` feeds it the payload on its own
+  stdin first, discards its output and exit code, and then renders. So that tool
+  keeps working alongside this line. On Windows that is
+  `~/.orca/agent-hooks/claude-statusline.cmd`; on macOS and Linux it is
+  `~/.orca/agent-hooks/claude-statusline.sh`, run with `/bin/sh` only inside an
+  Orca pane (`ORCA_PANE_KEY` or `ORCA_AGENT_PANE` set), as Orca's own command
+  does. On a machine without it, the guard skips it silently.
 
-To adapt that to a different tool, change `orca_cmd` near the top of
+To adapt that to a different tool, change `orca_cmd` / `orca_sh` near the top of
 `statusline.sh`.
 
 ## Performance
