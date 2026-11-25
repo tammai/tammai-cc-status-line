@@ -28,13 +28,19 @@ trap 'rm -f "$tmp"' EXIT INT TERM HUP
 # below need it, and stdin can only be drained a single time.
 cat >"$tmp"
 
-# Hand Orca's reporter the payload on ITS stdin (it reads via more.com),
-# never ours. Guard on the file existing so this still renders if Orca is
-# uninstalled or the path moves, and never let its output or exit code
-# touch our line.
+# Hand Orca's reporter the payload on ITS stdin, never ours. Orca ships a
+# .cmd on Windows (it reads via more.com) and a POSIX .sh elsewhere, which
+# its own statusLine command runs with /bin/sh only inside an Orca pane.
+# Guard on the file existing so this still renders if Orca is uninstalled
+# or the path moves, and never let its output or exit code touch our line.
 orca_cmd="$HOME/.orca/agent-hooks/claude-statusline.cmd"
-if [ "${STATUSLINE_SKIP_ORCA-}" != 1 ] && [ -f "$orca_cmd" ]; then
-  "$orca_cmd" <"$tmp" >/dev/null 2>&1 || true
+orca_sh="$HOME/.orca/agent-hooks/claude-statusline.sh"
+if [ "${STATUSLINE_SKIP_ORCA-}" != 1 ]; then
+  if [ -f "$orca_cmd" ]; then
+    "$orca_cmd" <"$tmp" >/dev/null 2>&1 || true
+  elif [ -n "${ORCA_PANE_KEY-}${ORCA_AGENT_PANE-}" ] && [ -f "$orca_sh" ] && [ -r "$orca_sh" ]; then
+    /bin/sh "$orca_sh" <"$tmp" >/dev/null 2>&1 || true
+  fi
 fi
 
 # --- pull the rendered fields out of the payload (no jq here; python) ---
